@@ -1,202 +1,283 @@
+import CryptoJS from "crypto-js";
 import { decodeProtectedHeader } from "jose";
-import jwt from "jsonwebtoken";
-import { JwtAnalysisResult, Vulnerability } from "@/lib/types";
 
-interface AnalyzeOptions {
-  expectedIssuer?: string;
-  expectedAudience?: string;
-  expectedAlgorithm?: string;
+import { AnalyzeResult, UploadedCodeFile, Vulnerability } from "@/lib/types";
+
+function lineForIndex(content: string, index: number) {
+  return content.slice(0, Math.max(index, 0)).split(/\r?\n/).length;
 }
 
-function addVulnerability(items: Vulnerability[], vuln: Vulnerability) {
-  if (!items.find((item) => item.id === vuln.id)) {
-    items.push(vuln);
+function evidenceAtLine(content: string, line: number) {
+  const lines = content.split(/\r?\n/);
+  return lines[Math.max(0, line - 1)]?.trim().slice(0, 220);
+}
+
+function pushVulnerability(
+  list: Vulnerability[],
+  file: string,
+  content: string,
+  index: number,
+  vulnerability: Omit<Vulnerability, "id" | "source" | "filePath" | "line" | "evidence">,
+) {
+  const line = lineForIndex(content, index);
+  list.push({
+    id: `static-${CryptoJS.SHA1(`${file}:${line}:${vulnerability.title}`).toString().slice(0, 12)}`,
+    source: "static",
+    filePath: file,
+    line,
+    evidence: evidenceAtLine(content, line),
+    ...vulnerability,
+  });
+}
+
+function inspectVerifyOptions(content: string) {
+  const results: Array<{ index: number; options: string }> = [];
+  const verifyCallRegex = /jwt\.verify\(([^;\n]+)\)/g;
+  let match: RegExpExecArray | null = null;
+
+  while ((match = verifyCallRegex.exec(content))) {
+    const rawArgs = match[1] || "";
+    const parts = rawArgs.split(",");
+    const optionsCandidate = parts.slice(2).join(",").trim();
+    results.push({
+      index: match.index,
+      options: optionsCandidate,
+    });
   }
+
+  return results;
 }
 
-export function analyzeJwtToken(token: string, options: AnalyzeOptions = {}): JwtAnalysisResult {
+function inspectSignOptions(content: string) {
+  const results: Array<{ index: number; options: string }> = [];
+  const signCallRegex = /jwt\.sign\(([^;\n]+)\)/g;
+  let match: RegExpExecArray | null = null;
+
+  while ((match = signCallRegex.exec(content))) {
+    const rawArgs = match[1] || "";
+    const parts = rawArgs.split(",");
+    const optionsCandidate = parts.slice(2).join(",").trim();
+    results.push({
+      index: match.index,
+      options: optionsCandidate,
+    });
+  }
+
+  return results;
+}
+
+function looksLikeHardcodedSecret(raw: string) {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  if (
+    trimmed.includes("process.env") ||
+    trimmed.includes("config") ||
+    trimmed.includes("secrets") ||
+    trimmed.includes("vault")
+  ) {
+    return false;
+  }
+
+  const stringLiteralMatch = trimmed.match(/^["'`](.+)["'`]$/);
+  if (!stringLiteralMatch) {
+    return false;
+  }
+
+  return stringLiteralMatch[1].length < 32;
+}
+
+function findJwtLiterals(content: string) {
+  const tokenRegex = /[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g;
+  return Array.from(content.matchAll(tokenRegex));
+}
+
+export function analyzeJwtImplementation(files: UploadedCodeFile[]): AnalyzeResult {
   const vulnerabilities: Vulnerability[] = [];
-  const now = Math.floor(Date.now() / 1000);
 
-  let decodedPayload: jwt.JwtPayload | string | null = null;
-  let protectedHeader: Record<string, unknown> = {};
+  const checks = [
+    "reject-none-algorithm",
+    "avoid-ignore-expiration",
+    "avoid-decode-without-verify",
+    "require-algorithm-pinning",
+    "avoid-hardcoded-weak-secrets",
+    "require-token-expiration",
+    "require-issuer-audience-checks",
+    "avoid-client-storage",
+  ];
 
-  try {
-    decodedPayload = jwt.decode(token);
-  } catch {
-    addVulnerability(vulnerabilities, {
-      id: "malformed-token",
-      title: "Malformed JWT",
-      severity: "critical",
-      description: "The provided token cannot be parsed as a valid JWT.",
-      impact: "A malformed token can break auth logic and conceal parser edge-case vulnerabilities.",
-      fix: "Ensure token generation uses RFC7519-compliant libraries and validate token shape before processing."
-    });
-  }
+  for (const file of files) {
+    const content = file.content;
 
-  try {
-    protectedHeader = decodeProtectedHeader(token);
-  } catch {
-    addVulnerability(vulnerabilities, {
-      id: "invalid-header",
-      title: "Unreadable JWT Header",
-      severity: "high",
-      description: "The token header could not be decoded.",
-      impact: "Header ambiguity can bypass algorithm checks in weak implementations.",
-      fix: "Reject tokens that fail structured header decoding before signature validation."
-    });
-  }
-
-  const alg = String(protectedHeader.alg ?? "unknown");
-  if (alg === "none") {
-    addVulnerability(vulnerabilities, {
-      id: "alg-none",
-      title: "Unsigned token algorithm (alg=none)",
-      severity: "critical",
-      description: "The token declares the 'none' algorithm, which disables signature verification.",
-      impact: "Attackers can forge arbitrary claims and impersonate users.",
-      fix: "Hardcode accepted algorithms and reject 'none' in verifier configuration."
-    });
-  }
-
-  if (["HS256", "HS384"].includes(alg)) {
-    addVulnerability(vulnerabilities, {
-      id: "weak-hmac-choice",
-      title: "Potentially weak shared-secret signing model",
-      severity: "medium",
-      description: `${alg} relies on a shared secret that is often leaked or reused in startup environments.`,
-      impact: "A weak or reused secret enables token forgery.",
-      fix: "Use RS256/ES256 with managed private keys, or enforce high-entropy HMAC secrets with rotation."
-    });
-  }
-
-  if (options.expectedAlgorithm && alg !== options.expectedAlgorithm) {
-    addVulnerability(vulnerabilities, {
-      id: "alg-mismatch",
-      title: "Unexpected signing algorithm",
-      severity: "high",
-      description: `Expected ${options.expectedAlgorithm} but found ${alg}.`,
-      impact: "Algorithm confusion may allow bypass if verifiers accept multiple algorithms.",
-      fix: "Pin exactly one allowed algorithm per issuer and reject all others."
-    });
-  }
-
-  if (!decodedPayload || typeof decodedPayload === "string") {
-    addVulnerability(vulnerabilities, {
-      id: "payload-unavailable",
-      title: "Payload claims unavailable",
-      severity: "high",
-      description: "Claims could not be decoded as an object payload.",
-      impact: "Authorization decisions may run on incomplete or invalid claim sets.",
-      fix: "Require payload object structure and reject non-object payload formats."
-    });
-  } else {
-    if (!decodedPayload.exp) {
-      addVulnerability(vulnerabilities, {
-        id: "missing-exp",
-        title: "Missing expiration claim",
+    const noneRegex = /["'`]none["'`]/gi;
+    let noneMatch: RegExpExecArray | null = null;
+    while ((noneMatch = noneRegex.exec(content))) {
+      pushVulnerability(vulnerabilities, file.name, content, noneMatch.index, {
+        title: "Unsigned tokens (`alg: none`) referenced in auth logic",
         severity: "critical",
-        description: "Token has no exp claim.",
-        impact: "Tokens can remain valid indefinitely if revocation is absent.",
-        fix: "Set short-lived exp values and enforce expiration validation in middleware."
+        category: "algorithm",
+        description:
+          "Your implementation references the `none` JWT algorithm. Attackers can forge tokens when unsigned JWTs are accepted.",
+        impact: "Authentication bypass across any endpoint that accepts forged tokens.",
+        recommendation:
+          "Pin accepted algorithms to strong options only (for example RS256/ES256). Explicitly reject `none` everywhere.",
       });
-    } else if (decodedPayload.exp > now + 60 * 60 * 24 * 30) {
-      addVulnerability(vulnerabilities, {
-        id: "long-exp",
-        title: "Excessive token lifetime",
-        severity: "medium",
-        description: "Token expiration is greater than 30 days.",
-        impact: "Stolen tokens remain usable for long periods.",
-        fix: "Use short access tokens (5-30 minutes) with rotating refresh tokens."
-      });
-    } else if (decodedPayload.exp <= now) {
-      addVulnerability(vulnerabilities, {
-        id: "expired-token",
-        title: "Token already expired",
+    }
+
+    const ignoreExpirationRegex = /ignoreExpiration\s*:\s*true/gi;
+    let ignoreExpMatch: RegExpExecArray | null = null;
+    while ((ignoreExpMatch = ignoreExpirationRegex.exec(content))) {
+      pushVulnerability(vulnerabilities, file.name, content, ignoreExpMatch.index, {
+        title: "Expiration validation disabled",
         severity: "high",
-        description: "Provided token has expired.",
-        impact: "Expired tokens may indicate missing expiration checks in consuming services.",
-        fix: "Reject expired tokens and emit explicit auth errors."
+        category: "expiration",
+        description:
+          "`ignoreExpiration: true` disables expiry enforcement and allows replaying old tokens.",
+        impact: "Compromised or stale tokens remain valid far longer than intended.",
+        recommendation:
+          "Remove `ignoreExpiration: true` and enforce strict expiration checks in every verification path.",
       });
     }
 
-    if (!decodedPayload.iat) {
-      addVulnerability(vulnerabilities, {
-        id: "missing-iat",
-        title: "Missing issued-at claim",
-        severity: "low",
-        description: "Token does not include iat.",
-        impact: "Forensics and replay detection become harder.",
-        fix: "Add iat and optionally jti to support replay detection and traceability."
-      });
-    }
-
-    if (decodedPayload.nbf && decodedPayload.nbf > now + 300) {
-      addVulnerability(vulnerabilities, {
-        id: "future-nbf",
-        title: "Token not yet valid",
-        severity: "medium",
-        description: "Token nbf is far in the future.",
-        impact: "Can cause auth failures and unpredictable rollout issues.",
-        fix: "Keep clock skew tolerance small and ensure synchronized system clocks."
-      });
-    }
-
-    if (!decodedPayload.iss) {
-      addVulnerability(vulnerabilities, {
-        id: "missing-issuer",
-        title: "Missing issuer claim",
-        severity: "medium",
-        description: "Token does not define iss.",
-        impact: "Cross-service confusion attacks become easier.",
-        fix: "Set and validate a strict issuer per environment."
-      });
-    } else if (options.expectedIssuer && decodedPayload.iss !== options.expectedIssuer) {
-      addVulnerability(vulnerabilities, {
-        id: "issuer-mismatch",
-        title: "Issuer mismatch",
+    const decodeRegex = /(jwt\.decode\(|decodeJwt\()/g;
+    let decodeMatch: RegExpExecArray | null = null;
+    while ((decodeMatch = decodeRegex.exec(content))) {
+      pushVulnerability(vulnerabilities, file.name, content, decodeMatch.index, {
+        title: "Token decoded without signature verification",
         severity: "high",
-        description: `Expected issuer ${options.expectedIssuer} but found ${decodedPayload.iss}.`,
-        impact: "Tokens from untrusted systems might be accepted.",
-        fix: "Enforce issuer allow-list at verification time."
+        category: "validation",
+        description:
+          "Decoding a token is not the same as verifying it. A decoded token payload may be attacker-controlled.",
+        impact: "Privilege escalation if decoded claims are trusted without cryptographic verification.",
+        recommendation:
+          "Use `jwt.verify` or JOSE verification APIs before trusting any claim from the payload.",
       });
     }
 
-    if (!decodedPayload.aud) {
-      addVulnerability(vulnerabilities, {
-        id: "missing-audience",
-        title: "Missing audience claim",
-        severity: "medium",
-        description: "Token does not include aud.",
-        impact: "A token issued for one service could be replayed against another.",
-        fix: "Set and validate aud for each protected service."
-      });
-    } else if (options.expectedAudience) {
-      const audiences = Array.isArray(decodedPayload.aud) ? decodedPayload.aud : [decodedPayload.aud];
-      if (!audiences.includes(options.expectedAudience)) {
-        addVulnerability(vulnerabilities, {
-          id: "audience-mismatch",
-          title: "Audience mismatch",
+    for (const verifyCall of inspectVerifyOptions(content)) {
+      const options = verifyCall.options;
+      if (!options.includes("algorithms")) {
+        pushVulnerability(vulnerabilities, file.name, content, verifyCall.index, {
+          title: "Verification without algorithm pinning",
           severity: "high",
-          description: `Expected audience ${options.expectedAudience} but token audience is ${audiences.join(", ")}.`,
-          impact: "Token replay across services is possible if audience checks are skipped.",
-          fix: "Reject tokens whose audience does not exactly match the API identifier."
+          category: "algorithm",
+          description:
+            "`jwt.verify` appears to run without an explicit `algorithms` allow-list, increasing confusion-attack risk.",
+          impact: "An attacker may exploit algorithm confusion if key handling is inconsistent.",
+          recommendation:
+            "Pass `algorithms: ['RS256']` or your exact approved list on every verification call.",
         });
+      }
+
+      if (!options.includes("issuer") || !options.includes("audience")) {
+        pushVulnerability(vulnerabilities, file.name, content, verifyCall.index, {
+          title: "Missing issuer/audience claim validation",
+          severity: "medium",
+          category: "claim-validation",
+          description:
+            "Verification appears to skip `issuer` and/or `audience` checks, so tokens minted for another service could be accepted.",
+          impact: "Cross-service token reuse and privilege confusion in multi-service environments.",
+          recommendation:
+            "Enforce `issuer` and `audience` validation with exact expected values during verification.",
+        });
+      }
+    }
+
+    const weakSecretRegex = /jwt\.(sign|verify)\(([^,]+),\s*([^,\n\r)]+)/g;
+    let weakSecretMatch: RegExpExecArray | null = null;
+    while ((weakSecretMatch = weakSecretRegex.exec(content))) {
+      const secretArg = weakSecretMatch[3] || "";
+      if (looksLikeHardcodedSecret(secretArg)) {
+        pushVulnerability(vulnerabilities, file.name, content, weakSecretMatch.index, {
+          title: "Weak hardcoded JWT secret",
+          severity: "critical",
+          category: "key-management",
+          description:
+            "A short literal secret is used directly in signing or verification logic.",
+          impact: "Attackers can brute-force or recover secrets and forge valid tokens.",
+          recommendation:
+            "Load a high-entropy secret from environment/secret manager. Use at least 256-bit random values.",
+        });
+      }
+    }
+
+    for (const signCall of inspectSignOptions(content)) {
+      const options = signCall.options;
+      if (!options || (!options.includes("expiresIn") && !options.includes("exp"))) {
+        pushVulnerability(vulnerabilities, file.name, content, signCall.index, {
+          title: "JWTs created without expiration",
+          severity: "high",
+          category: "expiration",
+          description:
+            "Token signing appears to omit `expiresIn`/`exp`, producing long-lived bearer tokens.",
+          impact: "Stolen tokens remain usable indefinitely.",
+          recommendation:
+            "Issue short-lived access tokens and rotate refresh tokens with replay detection.",
+        });
+      }
+    }
+
+    const storageRegex = /(localStorage\.setItem\([^\n]*token|sessionStorage\.setItem\([^\n]*token)/gi;
+    let storageMatch: RegExpExecArray | null = null;
+    while ((storageMatch = storageRegex.exec(content))) {
+      pushVulnerability(vulnerabilities, file.name, content, storageMatch.index, {
+        title: "JWT stored in browser storage",
+        severity: "medium",
+        category: "token-storage",
+        description:
+          "Tokens in `localStorage`/`sessionStorage` are exposed to XSS and browser extension attacks.",
+        impact: "Session takeover if frontend script execution is compromised.",
+        recommendation:
+          "Use secure, HttpOnly, SameSite cookies for session tokens and keep access tokens short-lived.",
+      });
+    }
+
+    for (const candidate of findJwtLiterals(content)) {
+      try {
+        const token = candidate[0];
+        const header = decodeProtectedHeader(token);
+        if (header.alg === "none") {
+          pushVulnerability(vulnerabilities, file.name, content, candidate.index ?? 0, {
+            title: "Embedded token uses `alg: none`",
+            severity: "critical",
+            category: "algorithm",
+            description:
+              "A token literal in source code decodes to an unsigned algorithm header.",
+            impact: "Unsafe fixtures can leak into production validation flows.",
+            recommendation:
+              "Remove unsigned token fixtures or isolate them to explicit negative-test suites only.",
+          });
+        }
+      } catch {
+        // Ignore non-JWT string matches.
       }
     }
   }
 
-  const summary = vulnerabilities.length === 0
-    ? "No obvious JWT claim or header misconfigurations were detected in the provided token."
-    : `Detected ${vulnerabilities.length} potential JWT security issue(s).`;
+  const deduplicated = vulnerabilities.filter(
+    (vulnerability, index, all) =>
+      all.findIndex(
+        (candidate) =>
+          candidate.title === vulnerability.title &&
+          candidate.filePath === vulnerability.filePath &&
+          candidate.line === vulnerability.line,
+      ) === index,
+  );
+
+  const checksRun = checks.length * Math.max(files.length, 1);
+  const failCount = deduplicated.length;
+  const passCount = Math.max(checksRun - failCount, 0);
 
   return {
-    summary,
-    vulnerabilities,
-    tokenMetadata: {
-      algorithm: alg,
-      header: protectedHeader,
-      payload: decodedPayload
-    }
+    vulnerabilities: deduplicated,
+    checksRun,
+    passCount,
+    failCount,
+    fileFingerprints: files.map((file) => ({
+      file: file.name,
+      sha256: CryptoJS.SHA256(file.content).toString(),
+    })),
   };
 }

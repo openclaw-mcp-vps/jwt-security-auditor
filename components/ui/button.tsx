@@ -1,27 +1,29 @@
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
+
 import { cn } from "@/lib/utils";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center rounded-md text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-[#0d1117] disabled:pointer-events-none disabled:opacity-50",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/70 disabled:pointer-events-none disabled:opacity-50",
   {
     variants: {
       variant: {
-        default: "bg-[#3fb950] text-[#0d1117] hover:bg-[#36a346]",
-        outline: "border border-[#30363d] bg-transparent text-[#e6edf3] hover:bg-[#161b22]",
-        danger: "bg-[#f85149] text-white hover:bg-[#dc3d36]"
+        default: "bg-cyan-500 text-slate-950 hover:bg-cyan-400",
+        secondary: "border border-slate-700 bg-slate-900 text-slate-100 hover:border-slate-500 hover:bg-slate-800",
+        ghost: "text-slate-200 hover:bg-slate-800",
+        danger: "bg-rose-500 text-rose-50 hover:bg-rose-400",
       },
       size: {
         default: "h-10 px-4 py-2",
-        lg: "h-11 px-8",
-        sm: "h-9 px-3"
-      }
+        sm: "h-9 rounded-md px-3",
+        lg: "h-11 rounded-md px-6",
+      },
     },
     defaultVariants: {
       variant: "default",
-      size: "default"
-    }
-  }
+      size: "default",
+    },
+  },
 );
 
 export interface ButtonProps
@@ -31,7 +33,7 @@ export interface ButtonProps
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant, size, ...props }, ref) => {
     return <button className={cn(buttonVariants({ variant, size, className }))} ref={ref} {...props} />;
-  }
+  },
 );
 Button.displayName = "Button";
 

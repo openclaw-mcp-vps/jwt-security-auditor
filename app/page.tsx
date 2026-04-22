@@ -1,106 +1,162 @@
 import Link from "next/link";
-import { ArrowRight, Shield, Timer, CircleAlert } from "lucide-react";
-import { PricingTable } from "@/components/pricing-table";
+import { ArrowRight, CheckCircle2, ShieldAlert, Zap } from "lucide-react";
 
-const faqs = [
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
+const faqItems = [
   {
-    q: "How is this different from generic API scanners?",
-    a: "JWT Security Auditor runs auth-specific abuse tests: unsigned token acceptance, malformed parsing, expiration handling, and issuer/audience validation drift."
+    question: "What does JWT Security Auditor test?",
+    answer:
+      "The tool checks both source code and live endpoints for high-impact JWT mistakes: algorithm confusion, missing expiration enforcement, weak secrets, claim validation gaps, and malformed-token handling issues.",
   },
   {
-    q: "Will this break my production API?",
-    a: "No destructive payloads are sent. The scanner performs read-like auth probes with intentionally invalid tokens to verify your rejection paths."
+    question: "How fast can teams run an audit?",
+    answer:
+      "Most scans complete in under two minutes. Upload your auth code or point to a staging endpoint, then review prioritized findings with exact remediation steps.",
   },
   {
-    q: "When should teams run this?",
-    a: "Before every auth release, before penetration tests, and ahead of SOC2 or customer security reviews."
-  }
+    question: "Is this a replacement for a full security review?",
+    answer:
+      "It is a pre-release validation layer that catches common and costly JWT flaws early. Use it before launches and compliance reviews to reduce security review churn.",
+  },
+  {
+    question: "How does billing work?",
+    answer:
+      "One flat subscription at $15/month through Stripe hosted checkout. After purchase, unlock access in the app using your checkout email.",
+  },
 ];
 
 export default function HomePage() {
   return (
-    <main className="mx-auto max-w-6xl px-4 pb-20 pt-10 sm:px-8">
-      <section className="grid gap-8 pb-12 lg:grid-cols-2 lg:items-center">
-        <div className="space-y-6">
-          <p className="inline-flex items-center rounded-full border border-[#30363d] px-3 py-1 text-sm text-[#9da7b3]">
-            Security Tools • Built for backend teams shipping fast
-          </p>
-          <h1 className="text-4xl font-bold leading-tight sm:text-5xl">
-            Audit JWT implementations for security vulnerabilities
-          </h1>
-          <p className="max-w-xl text-lg text-[#9da7b3]">
-            Run automated JWT abuse-case tests against your auth flow and get a report with clear remediation steps. Catch misconfigured token validation before attackers do.
-          </p>
-          <div className="flex flex-col gap-3 sm:flex-row">
-            <Link
-              href="/scan"
-              className="inline-flex items-center justify-center rounded-md bg-[#3fb950] px-5 py-3 text-sm font-medium text-[#0d1117] hover:bg-[#36a346]"
-            >
-              Start Security Scan
-              <ArrowRight className="ml-2 h-4 w-4" />
-            </Link>
-            <a
-              href="#pricing"
-              className="inline-flex items-center justify-center rounded-md border border-[#30363d] px-5 py-3 text-sm font-medium hover:bg-[#161b22]"
-            >
-              View Pricing
-            </a>
+    <main className="relative min-h-screen overflow-hidden">
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(120deg,rgba(34,211,238,0.12),transparent_45%),linear-gradient(300deg,rgba(56,189,248,0.08),transparent_50%)]" />
+
+      <div className="relative mx-auto max-w-6xl px-4 pb-20 pt-8 md:px-8">
+        <header className="mb-16 flex items-center justify-between">
+          <p className="text-sm font-semibold uppercase tracking-[0.22em] text-cyan-300">JWT Security Auditor</p>
+          <Link href="/audit" className="text-sm text-slate-300 hover:text-cyan-300">
+            Open Audit Workspace
+          </Link>
+        </header>
+
+        <section className="grid gap-10 md:grid-cols-[1.2fr_0.8fr] md:items-center">
+          <div>
+            <p className="mb-4 inline-flex rounded-full border border-cyan-400/30 bg-cyan-500/10 px-3 py-1 text-xs uppercase tracking-[0.18em] text-cyan-300">
+              Audit JWT implementations for security vulnerabilities
+            </p>
+            <h1 className="max-w-2xl text-4xl font-semibold leading-tight text-slate-100 md:text-6xl">
+              Catch token flaws before one misconfigured claim leaks your users.
+            </h1>
+            <p className="mt-6 max-w-2xl text-base leading-relaxed text-slate-300 md:text-lg">
+              JWT vulnerabilities hide in routine auth code and slip through review. This auditor scans your
+              implementation and probes your endpoints for exploitable JWT mistakes, then delivers a practical security
+              report with fixes your backend team can ship the same day.
+            </p>
+
+            <div className="mt-8 flex flex-wrap gap-3">
+              <a href={process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK}>
+                <Button size="lg">
+                  Buy Access - $15/mo
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+              </a>
+              <Link href="/audit">
+                <Button variant="secondary" size="lg">
+                  Go to Audit Workspace
+                </Button>
+              </Link>
+            </div>
           </div>
-        </div>
 
-        <div className="rounded-2xl border border-[#30363d] bg-[#111827]/80 p-6">
-          <h2 className="mb-4 text-xl font-semibold">Why teams buy this at $15/mo</h2>
-          <ul className="space-y-3 text-sm text-[#9da7b3]">
-            <li className="flex items-start gap-2">
-              <CircleAlert className="mt-0.5 h-4 w-4 text-[#f85149]" />
-              JWT mistakes rarely show in code review. One missed claim check can expose all accounts.
-            </li>
-            <li className="flex items-start gap-2">
-              <Timer className="mt-0.5 h-4 w-4 text-[#3fb950]" />
-              Security consultants are slow and expensive. Teams need launch-blocking validation this week.
-            </li>
-            <li className="flex items-start gap-2">
-              <Shield className="mt-0.5 h-4 w-4 text-[#3fb950]" />
-              This gives concrete pass/fail evidence for engineers and compliance stakeholders.
-            </li>
-          </ul>
-        </div>
-      </section>
+          <Card className="border-cyan-900/40 bg-[#0e1624]/85">
+            <CardHeader>
+              <CardTitle className="text-2xl">Why teams pay</CardTitle>
+              <CardDescription>
+                Security audits are expensive and slow. Startup release cycles are not.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4 text-sm text-slate-300">
+              <div className="flex items-start gap-3">
+                <ShieldAlert className="mt-0.5 h-4 w-4 text-rose-300" />
+                <p>JWT auth flaws can expose every account tied to your API.</p>
+              </div>
+              <div className="flex items-start gap-3">
+                <Zap className="mt-0.5 h-4 w-4 text-cyan-300" />
+                <p>Get immediate signal before launch, incident response, or compliance prep.</p>
+              </div>
+              <div className="flex items-start gap-3">
+                <CheckCircle2 className="mt-0.5 h-4 w-4 text-emerald-300" />
+                <p>Spend $15/month instead of $10k+ for every ad-hoc external review cycle.</p>
+              </div>
+            </CardContent>
+          </Card>
+        </section>
 
-      <section className="grid gap-4 border-y border-[#30363d] py-12 sm:grid-cols-3">
-        <div>
-          <h3 className="mb-2 text-lg font-semibold">Problem</h3>
-          <p className="text-sm text-[#9da7b3]">
-            Most incidents come from token verification drift: algorithm confusion, stale issuer settings, and skipped expiration checks under edge paths.
-          </p>
-        </div>
-        <div>
-          <h3 className="mb-2 text-lg font-semibold">Solution</h3>
-          <p className="text-sm text-[#9da7b3]">
-            Automated scanner that attacks your own auth endpoints with realistic JWT abuse cases and maps each finding to direct engineering fixes.
-          </p>
-        </div>
-        <div>
-          <h3 className="mb-2 text-lg font-semibold">Outcome</h3>
-          <p className="text-sm text-[#9da7b3]">
-            Ship auth changes with confidence, avoid expensive emergency patches, and walk into security reviews with evidence.
-          </p>
-        </div>
-      </section>
+        <section className="mt-24 grid gap-4 md:grid-cols-3">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-xl">1. Upload auth code</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-slate-300">
+              Analyze middleware, token helpers, and route guards to detect insecure signing, claim checks, and storage
+              patterns.
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-xl">2. Test live endpoints</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-slate-300">
+              Run attack probes against protected routes to verify unsigned, expired, and forged tokens are rejected.
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-xl">3. Ship fixes faster</CardTitle>
+            </CardHeader>
+            <CardContent className="text-sm text-slate-300">
+              Use a ranked remediation list with line-level evidence and practical recommendations your team can apply
+              quickly.
+            </CardContent>
+          </Card>
+        </section>
 
-      <section id="pricing" className="py-12">
-        <PricingTable />
-      </section>
+        <section id="pricing" className="mt-24">
+          <Card className="border-cyan-800/40 bg-cyan-500/5">
+            <CardHeader>
+              <CardTitle className="text-3xl">Pricing</CardTitle>
+              <CardDescription>Built for backend teams shipping quickly without dedicated security engineers.</CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+              <div>
+                <p className="text-4xl font-semibold text-slate-100">$15<span className="text-xl text-slate-400">/month</span></p>
+                <p className="mt-2 text-sm text-slate-300">Unlimited JWT scans across code uploads and endpoint probes.</p>
+              </div>
+              <a href={process.env.NEXT_PUBLIC_STRIPE_PAYMENT_LINK}>
+                <Button size="lg">
+                  Buy with Stripe Checkout
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+              </a>
+            </CardContent>
+          </Card>
+        </section>
 
-      <section className="space-y-4 border-t border-[#30363d] pt-12">
-        <h2 className="text-2xl font-semibold">Frequently Asked Questions</h2>
-        {faqs.map((faq) => (
-          <div key={faq.q} className="rounded-lg border border-[#30363d] bg-[#111827]/70 p-4">
-            <h3 className="font-medium">{faq.q}</h3>
-            <p className="mt-2 text-sm text-[#9da7b3]">{faq.a}</p>
+        <section className="mt-24">
+          <h2 className="mb-6 text-3xl font-semibold text-slate-100">FAQ</h2>
+          <div className="space-y-4">
+            {faqItems.map((item) => (
+              <Card key={item.question}>
+                <CardHeader>
+                  <CardTitle className="text-xl">{item.question}</CardTitle>
+                </CardHeader>
+                <CardContent className="text-sm leading-relaxed text-slate-300">{item.answer}</CardContent>
+              </Card>
+            ))}
           </div>
-        ))}
-      </section>
+        </section>
+      </div>
     </main>
   );
 }

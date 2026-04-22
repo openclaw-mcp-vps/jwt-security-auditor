@@ -2,33 +2,50 @@
 
 :root {
   --background: #0d1117;
-  --panel: #111827;
-  --panel-soft: #161b22;
-  --text: #e6edf3;
-  --muted: #9da7b3;
-  --accent: #3fb950;
-  --danger: #f85149;
-  --border: #30363d;
+  --panel: #121a24;
+  --panel-elevated: #172235;
+  --text: #e5edf5;
+  --muted: #91a4b8;
+  --accent: #34d3ff;
+  --accent-soft: rgba(52, 211, 255, 0.12);
 }
 
 * {
-  box-sizing: border-box;
+  border-color: #273548;
 }
 
 html,
 body {
-  padding: 0;
-  margin: 0;
-  background: radial-gradient(circle at top, #151d2e 0%, #0d1117 55%);
+  background: radial-gradient(circle at 15% 0%, rgba(2, 132, 199, 0.2), transparent 40%),
+    radial-gradient(circle at 85% 20%, rgba(6, 182, 212, 0.14), transparent 35%),
+    var(--background);
   color: var(--text);
   min-height: 100%;
 }
 
 body {
-  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  font-family: var(--font-body), sans-serif;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-display), sans-serif;
+}
+
+code,
+pre,
+kbd {
+  font-family: var(--font-mono), monospace;
 }
 
 a {
   color: inherit;
-  text-decoration: none;
+}
+
+::selection {
+  background: rgba(34, 211, 238, 0.2);
 }

@@ -1,76 +1,151 @@
-import { promises as fs } from "fs";
-import path from "path";
-import crypto from "crypto";
-import { FullScanReport, JwtAnalysisResult, SecurityTestResult } from "@/lib/types";
+import { randomUUID } from "crypto";
 
-const DATA_DIR = path.join(process.cwd(), ".data");
-const REPORT_FILE = path.join(DATA_DIR, "reports.json");
+import { AnalyzeResult, EndpointTestResult, SecurityReport, Severity, Vulnerability } from "@/lib/types";
 
-async function ensureStore() {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-  try {
-    await fs.access(REPORT_FILE);
-  } catch {
-    await fs.writeFile(REPORT_FILE, "[]", "utf8");
+const severityWeight: Record<Severity, number> = {
+  critical: 30,
+  high: 18,
+  medium: 10,
+  low: 5,
+  info: 2,
+};
+
+function gradeFromScore(score: number): SecurityReport["grade"] {
+  if (score >= 90) {
+    return "A";
   }
-}
-
-async function loadReports(): Promise<FullScanReport[]> {
-  await ensureStore();
-  const raw = await fs.readFile(REPORT_FILE, "utf8");
-  try {
-    return JSON.parse(raw) as FullScanReport[];
-  } catch {
-    return [];
+  if (score >= 80) {
+    return "B";
   }
+  if (score >= 70) {
+    return "C";
+  }
+  if (score >= 60) {
+    return "D";
+  }
+  return "F";
 }
 
-async function saveReports(reports: FullScanReport[]) {
-  await fs.writeFile(REPORT_FILE, JSON.stringify(reports, null, 2), "utf8");
+function scoreFromVulnerabilities(vulnerabilities: Vulnerability[]) {
+  const penalty = vulnerabilities.reduce((total, vulnerability) => {
+    return total + severityWeight[vulnerability.severity];
+  }, 0);
+
+  return Math.max(100 - Math.min(penalty, 95), 5);
 }
 
-function computeRiskScore(vulnCount: number, failedTests: number): number {
-  const score = Math.min(100, vulnCount * 12 + failedTests * 10);
-  return Math.max(0, score);
+function buildSummary(sourceType: SecurityReport["sourceType"], vulnerabilities: Vulnerability[]) {
+  if (vulnerabilities.length === 0) {
+    return sourceType === "code"
+      ? "No critical JWT weaknesses were detected in the uploaded implementation. Continue with dependency and runtime hardening checks before release."
+      : "Endpoint rejected all attack probes in this run. Keep regression tests in CI to prevent auth hardening drift.";
+  }
+
+  const criticalCount = vulnerabilities.filter((item) => item.severity === "critical").length;
+  const highCount = vulnerabilities.filter((item) => item.severity === "high").length;
+
+  if (criticalCount > 0) {
+    return `Detected ${criticalCount} critical JWT vulnerability${criticalCount > 1 ? "ies" : "y"}. Fix these before shipping because they can enable immediate authentication bypass.`;
+  }
+
+  if (highCount > 0) {
+    return `Detected ${highCount} high-severity issue${highCount > 1 ? "s" : ""} that materially increase account takeover risk if exploited.`;
+  }
+
+  return `Detected ${vulnerabilities.length} lower-severity weakness${vulnerabilities.length > 1 ? "es" : ""}. Addressing these will improve token integrity and incident resilience.`;
 }
 
-export async function createScanReport(params: {
-  token?: string;
-  endpoint?: string;
-  analysis: JwtAnalysisResult;
-  endpointTests: SecurityTestResult[];
-}): Promise<FullScanReport> {
-  const reports = await loadReports();
-  const failedTests = params.endpointTests.filter((test) => !test.passed).length;
-  const riskScore = computeRiskScore(params.analysis.vulnerabilities.length, failedTests);
-
-  const recommendations = [
-    ...params.analysis.vulnerabilities.map((vuln) => vuln.fix),
-    ...params.endpointTests.filter((test) => !test.passed).map((test) => `Fix test failure: ${test.name}. ${test.detail}`)
-  ].slice(0, 8);
-
-  const report: FullScanReport = {
-    id: crypto.randomUUID(),
-    createdAt: new Date().toISOString(),
-    input: {
-      token: params.token,
-      endpoint: params.endpoint
+function buildChartData(vulnerabilities: Vulnerability[]) {
+  const counts = vulnerabilities.reduce(
+    (acc, vulnerability) => {
+      acc[vulnerability.severity] += 1;
+      return acc;
     },
-    analysis: params.analysis,
-    endpointTests: params.endpointTests,
-    riskScore,
-    recommendations: recommendations.length > 0
-      ? recommendations
-      : ["No immediate changes required, but continue periodic auth regression testing."]
-  };
+    {
+      critical: 0,
+      high: 0,
+      medium: 0,
+      low: 0,
+      info: 0,
+    },
+  );
 
-  reports.unshift(report);
-  await saveReports(reports.slice(0, 200));
-
-  return report;
+  return [
+    { name: "Critical", value: counts.critical },
+    { name: "High", value: counts.high },
+    { name: "Medium", value: counts.medium },
+    { name: "Low", value: counts.low },
+    { name: "Info", value: counts.info },
+  ];
 }
 
-export async function getScanReportById(id: string): Promise<FullScanReport | null> {
-  const reports = await loadReports();
-  return reports.find((report) => report.id === id) ?? null;
+function topRecommendations(vulnerabilities: Vulnerability[]) {
+  const unique = Array.from(new Set(vulnerabilities.map((vulnerability) => vulnerability.recommendation)));
+  return unique.slice(0, 8);
+}
+
+function buildReportBase(input: {
+  sourceType: SecurityReport["sourceType"];
+  target: string;
+  vulnerabilities: Vulnerability[];
+  checksRun: number;
+  passCount: number;
+  failCount: number;
+  metadata?: Record<string, unknown>;
+}) {
+  const score = scoreFromVulnerabilities(input.vulnerabilities);
+
+  return {
+    id: randomUUID(),
+    createdAt: new Date().toISOString(),
+    sourceType: input.sourceType,
+    target: input.target,
+    score,
+    grade: gradeFromScore(score),
+    summary: buildSummary(input.sourceType, input.vulnerabilities),
+    checksRun: input.checksRun,
+    passCount: input.passCount,
+    failCount: input.failCount,
+    vulnerabilities: input.vulnerabilities,
+    recommendations: topRecommendations(input.vulnerabilities),
+    chartData: buildChartData(input.vulnerabilities),
+    metadata: input.metadata,
+  } satisfies SecurityReport;
+}
+
+export function generateCodeReport(input: {
+  target: string;
+  analyzeResult: AnalyzeResult;
+}): SecurityReport {
+  return buildReportBase({
+    sourceType: "code",
+    target: input.target,
+    vulnerabilities: input.analyzeResult.vulnerabilities,
+    checksRun: input.analyzeResult.checksRun,
+    passCount: input.analyzeResult.passCount,
+    failCount: input.analyzeResult.failCount,
+    metadata: {
+      fileFingerprints: input.analyzeResult.fileFingerprints,
+      filesScanned: input.analyzeResult.fileFingerprints.length,
+    },
+  });
+}
+
+export function generateEndpointReport(input: {
+  target: string;
+  endpointResult: EndpointTestResult;
+  method: string;
+}): SecurityReport {
+  return buildReportBase({
+    sourceType: "endpoint",
+    target: input.target,
+    vulnerabilities: input.endpointResult.vulnerabilities,
+    checksRun: input.endpointResult.checksRun,
+    passCount: input.endpointResult.passCount,
+    failCount: input.endpointResult.failCount,
+    metadata: {
+      method: input.method,
+      tests: input.endpointResult.tests,
+    },
+  });
 }
